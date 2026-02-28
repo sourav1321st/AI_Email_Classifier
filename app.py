@@ -1,174 +1,173 @@
-import streamlit as st # type: ignore
+import streamlit as st
 import pickle
-import re
-import pandas as pd
+import numpy as np
+from scipy.sparse import hstack
 
-# -------------------------------
-# Load Models
-# -------------------------------
+# ---------------- LOAD MODELS ----------------
 spam_model = pickle.load(open("spam_model.pkl", "rb"))
 spam_vectorizer = pickle.load(open("spam_vectorizer.pkl", "rb"))
-category_model = pickle.load(open("category_model.pkl", "rb"))
-urgency_model = pickle.load(open("urgency_model.pkl", "rb"))
 
-# -------------------------------
-# Tag Function
-# -------------------------------
-def tag(text, color):
-    return f"""
-        <span style="
-            background-color:{color};
-            color:white;
-            padding:4px 10px;
-            border-radius:8px;
-            font-size:14px;
-            margin-right:6px;">
-            {text}
-        </span>
-    """
+cat_model = pickle.load(open("category_model.pkl", "rb"))
+cat_tfidf_word = pickle.load(open("category_tfidf_word.pkl", "rb"))
+cat_tfidf_char = pickle.load(open("category_tfidf_char.pkl", "rb"))
 
-# -------------------------------
-# Text Cleaning Function
-# -------------------------------
-def clean_text(text):
-    text = str(text).lower()
-    text = re.sub(r'http\S+', '', text)
-    text = re.sub(r'\d+', '', text)
-    text = re.sub(r'[^a-zA-Z ]', '', text)
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip()
+urg_model = pickle.load(open("urgency_model.pkl", "rb"))
+urg_tfidf_word = pickle.load(open("urgency_tfidf_word.pkl", "rb"))
+urg_tfidf_char = pickle.load(open("urgency_tfidf_char.pkl", "rb"))
+urg_scaler = pickle.load(open("urgency_scaler.pkl", "rb"))
 
-# -------------------------------
-# Prediction Function
-# -------------------------------
-def predict_email(subject, body):
-    full_text = subject + " " + body
-    text_clean = clean_text(full_text)
+# ---------------- SESSION STATE FOR HISTORY ----------------
+if "mail_history" not in st.session_state:
+    st.session_state.mail_history = []
 
-    # Spam prediction
-    spam_vec = spam_vectorizer.transform([text_clean])
-    spam_pred = spam_model.predict(spam_vec)[0]
-    spam_label = "Spam" if spam_pred == 1 else "Not Spam"
+# ---------------- HELPER FUNCTIONS ----------------
+def extract_urgency_features(text):
+    text_lower = text.lower()
+    urgency_words = ["urgent", "asap", "immediately", "now", "important", "priority"]
+    has_urgency_word = int(any(word in text_lower for word in urgency_words))
+    urgency_signal = text_lower.count("!")
+    encoded_queue = 1 if "queue" in text_lower else 0
+    text_length = len(text.split())
+    numeric = np.array([[encoded_queue, urgency_signal, has_urgency_word, text_length]])
+    return numeric
 
-    # Category prediction
-    category = category_model.predict([text_clean])[0]
+def format_spam_label(pred):
+    p = str(pred).strip().lower()
+    if p in {"spam", "1", "true", "yes"}:
+        return "Spam"
+    return "Not Spam"
 
-    # Urgency prediction
-    urgency = urgency_model.predict([text_clean])[0]
+def format_urgency_label(pred):
+    p = str(pred).strip().lower()
+    if p in {"high", "1"}:
+        return "High"
+    if p in {"medium", "2"}:
+        return "Medium"
+    if p in {"low", "0"}:
+        return "Low"
+    return str(pred).capitalize()
 
-    return spam_label, category, urgency
+# ---------------- UI LAYOUT ----------------
+st.set_page_config(page_title="AI Email Analyzer", layout="wide")
+st.title("📧 AI Email Classifier Dashboard")
 
-# -------------------------------
-# Session State Initialization
-# -------------------------------
-if "emails" not in st.session_state:
-    st.session_state.emails = []
+left, right = st.columns([2, 1])
 
-st.title("AI Email Classifier Dashboard")
-
-# -------------------------------
-# Sidebar Filters
-# -------------------------------
-st.sidebar.header("Filters")
+# ---------------- SIDEBAR FILTERS ----------------
+st.sidebar.title("Filters")
 
 spam_filter = st.sidebar.radio(
     "Spam Filter",
     ["All", "Spam Only", "Not Spam Only"]
 )
 
-urgency_filters = st.sidebar.multiselect(
+urgency_filter = st.sidebar.multiselect(
     "Urgency Level",
-    ["high", "medium", "low"],
-    default=["high", "medium", "low"]
+    ["High", "Medium", "Low"],
+    default=["High", "Medium", "Low"]
 )
 
-# -------------------------------
-# Email Input Form
-# -------------------------------
-st.subheader("Enter Email")
+all_categories = sorted(list(set(mail["Category"] for mail in st.session_state.mail_history))) if st.session_state.mail_history else []
+category_filter = st.sidebar.multiselect(
+    "Category Filter",
+    options=all_categories,
+    default=all_categories
+)
 
-with st.form("email_form", clear_on_submit=True):
-    subject = st.text_input("Subject")
-    body = st.text_area("Body")
-    submitted = st.form_submit_button("Predict")
+# ================= LEFT PANEL =================
+with left:
+    st.subheader("Enter Email")
 
-if submitted:
-    if subject.strip() and body.strip():
-        spam, category, urgency = predict_email(subject, body)
+    with st.form("email_form"):
+        subject = st.text_input("Subject")
+        body = st.text_area("Body", height=200)
+        submitted = st.form_submit_button("Predict")
 
-        st.session_state.emails.append({
-            "Subject": subject,
-            "Body": body,
-            "Spam": spam,
-            "Category": category,
-            "Urgency": urgency
-        })
+    if submitted:
+        if subject.strip() == "" and body.strip() == "":
+            st.warning("Please enter subject or body!")
+        else:
+            email_text = (subject + " " + body).strip()
 
-        st.rerun()
+            # Spam
+            spam_vec = spam_vectorizer.transform([email_text])
+            spam_raw = spam_model.predict(spam_vec)[0]
+            spam_label = format_spam_label(spam_raw)
+
+            # Category
+            cat_word = cat_tfidf_word.transform([email_text])
+            cat_char = cat_tfidf_char.transform([email_text])
+            cat_features = hstack([cat_word, cat_char])
+            cat_pred = cat_model.predict(cat_features)[0]
+
+            # Urgency
+            urg_word = urg_tfidf_word.transform([email_text])
+            urg_char = urg_tfidf_char.transform([email_text])
+            urg_text_vec = hstack([urg_word, urg_char])
+            numeric_features = extract_urgency_features(email_text)
+            numeric_scaled = urg_scaler.transform(numeric_features)
+            urg_final = hstack([urg_text_vec, numeric_scaled])
+            urg_raw = urg_model.predict(urg_final)[0]
+            urg_label = format_urgency_label(urg_raw)
+
+            # ---- STORE IN HISTORY ----
+            preview = subject[:40] + "..." if subject else body[:40] + "..."
+            st.session_state.mail_history.append({
+                "Subject": subject,
+                "Body": body,
+                "Preview": preview,
+                "Spam": spam_label,
+                "Category": str(cat_pred),
+                "Urgency": urg_label
+            })
+
+            # Show result
+            st.subheader("📊 Prediction Result")
+            if spam_label == "Spam":
+                st.error("🚨 Spam Detected")
+            else:
+                st.success("✅ Not Spam")
+
+            st.info(f"📂 Category: {cat_pred}")
+
+            if urg_label == "High":
+                st.error(f"⏰ Urgency: {urg_label}")
+            elif urg_label == "Medium":
+                st.warning(f"⚡ Urgency: {urg_label}")
+            else:
+                st.success(f"🟢 Urgency: {urg_label}")
+
+# ================= RIGHT PANEL =================
+with right:
+    st.subheader("📜 Analyzed Mail History")
+
+    if len(st.session_state.mail_history) == 0:
+        st.info("No emails analyzed yet.")
     else:
-        st.warning("Please enter both subject and body")
+        filtered_history = []
 
-# -------------------------------
-# Display Emails Table
-# -------------------------------
-if st.session_state.emails:
-    df = pd.DataFrame(st.session_state.emails)
+        for mail in st.session_state.mail_history:
+            spam_value = mail["Spam"]
+            urgency_value = mail["Urgency"]
+            category_value = mail["Category"]
 
-    # Apply Spam Filter
-    if spam_filter == "Spam Only":
-        df = df[df["Spam"] == "Spam"]
-    elif spam_filter == "Not Spam Only":
-        df = df[df["Spam"] == "Not Spam"]
+            if spam_filter == "Spam Only" and spam_value != "Spam":
+                continue
+            if spam_filter == "Not Spam Only" and spam_value == "Spam":
+                continue
+            if urgency_value not in urgency_filter:
+                continue
+            if category_filter and category_value not in category_filter:
+                continue
 
-    # Apply Urgency Filter
-    df = df[df["Urgency"].str.lower().isin(urgency_filters)]
+            filtered_history.append(mail)
 
-    st.subheader("Email List")
-
-    if not df.empty:
-        display_df = df[["Subject", "Spam", "Category", "Urgency"]]
-        st.dataframe(display_df, use_container_width=True)
-
-        # Select email to view full details
-        st.subheader("Click to view email")
-
-        options = ["None"] + list(df.index)
-
-        selected_index = st.selectbox(
-            "Select an email",
-            options,
-            format_func=lambda x: "Select email..." if x == "None" else df.loc[x, "Subject"]
-        )
-
-        if selected_index != "None":
-            st.subheader("Email Details")
-            subject = df.loc[selected_index, "Subject"]
-            body = df.loc[selected_index, "Body"]
-            spam = df.loc[selected_index, "Spam"]
-            category = df.loc[selected_index, "Category"]
-            urgency = df.loc[selected_index, "Urgency"]
-
-            st.markdown(f"**Subject:** {subject}")
-            st.markdown(f"**Body:** {body}")
-
-            # Color logic
-            spam_color = "#e74c3c" if spam == "Spam" else "#2ecc71"
-
-            urgency_colors = {
-                "high": "#e74c3c",
-                "medium": "#f39c12",
-                "low": "#3498db"
-            }
-
-            urgency_color = urgency_colors.get(urgency.lower(), "#7f8c8d")
-
-            # Display tags
-            st.markdown(
-              tag(spam, spam_color) +
-              tag(category, "#6c5ce7") +
-              tag(urgency.capitalize(), urgency_color),
-              unsafe_allow_html=True
-            )
-
-    else:
-        st.info("No emails match selected filters.")
+        if len(filtered_history) == 0:
+            st.info("No emails match the selected filters.")
+        else:
+            for mail in filtered_history:
+                label = f"📧 {mail['Preview']} | {mail['Spam']} | {mail['Category']} | {mail['Urgency']}"
+                with st.expander(label):
+                    st.markdown(f"**Subject:** {mail['Subject']}")
+                    st.markdown("---")
+                    st.write(mail["Body"])
