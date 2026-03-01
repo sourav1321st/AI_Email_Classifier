@@ -4,18 +4,32 @@ import numpy as np
 from scipy.sparse import hstack
 
 # ---------------- LOAD MODELS ----------------
-spam_model = pickle.load(open("spam_model.pkl", "rb"))
-spam_vectorizer = pickle.load(open("spam_vectorizer.pkl", "rb"))
+# ---------------- LOAD MODELS WITH CACHING ----------------
+@st.cache_resource
+def load_models():
+    spam_model = pickle.load(open("spam_model.pkl", "rb"))
+    spam_vectorizer = pickle.load(open("spam_vectorizer.pkl", "rb"))
 
-cat_model = pickle.load(open("category_model.pkl", "rb"))
-cat_tfidf_word = pickle.load(open("category_tfidf_word.pkl", "rb"))
-cat_tfidf_char = pickle.load(open("category_tfidf_char.pkl", "rb"))
+    cat_model = pickle.load(open("category_model.pkl", "rb"))
+    cat_tfidf_word = pickle.load(open("category_tfidf_word.pkl", "rb"))
+    cat_tfidf_char = pickle.load(open("category_tfidf_char.pkl", "rb"))
 
-urg_model = pickle.load(open("urgency_model.pkl", "rb"))
-urg_tfidf_word = pickle.load(open("urgency_tfidf_word.pkl", "rb"))
-urg_tfidf_char = pickle.load(open("urgency_tfidf_char.pkl", "rb"))
-urg_scaler = pickle.load(open("urgency_scaler.pkl", "rb"))
+    urg_model = pickle.load(open("urgency_model.pkl", "rb"))
+    urg_tfidf_word = pickle.load(open("urgency_tfidf_word.pkl", "rb"))
+    urg_tfidf_char = pickle.load(open("urgency_tfidf_char.pkl", "rb"))
+    urg_scaler = pickle.load(open("urgency_scaler.pkl", "rb"))
 
+    return (
+        spam_model, spam_vectorizer,
+        cat_model, cat_tfidf_word, cat_tfidf_char,
+        urg_model, urg_tfidf_word, urg_tfidf_char, urg_scaler
+    )
+
+(
+    spam_model, spam_vectorizer,
+    cat_model, cat_tfidf_word, cat_tfidf_char,
+    urg_model, urg_tfidf_word, urg_tfidf_char, urg_scaler
+) = load_models()
 # ---------------- SESSION STATE FOR HISTORY ----------------
 if "mail_history" not in st.session_state:
     st.session_state.mail_history = []
@@ -66,14 +80,15 @@ urgency_filter = st.sidebar.multiselect(
     ["High", "Medium", "Low"],
     default=["High", "Medium", "Low"]
 )
+all_categories = sorted(
+    {mail.get("Category", "Unknown") for mail in st.session_state.mail_history}
+) if st.session_state.mail_history else []
 
-all_categories = sorted(list(set(mail["Category"] for mail in st.session_state.mail_history))) if st.session_state.mail_history else []
 category_filter = st.sidebar.multiselect(
     "Category Filter",
     options=all_categories,
-    default=all_categories
+    default=all_categories if all_categories else []
 )
-
 # ================= LEFT PANEL =================
 with left:
     st.subheader("Enter Email")
