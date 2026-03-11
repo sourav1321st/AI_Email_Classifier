@@ -136,7 +136,7 @@ Used for training category classification and urgency detection models.
 ### 1 Clone the repository
 
 ```
-git clone https://github.com/yourusername/AI_Email_Classifier.git
+git clone https://github.com/sourav1321st/AI_Email_Classifier.git
 cd AI_Email_Classifier
 ```
 
